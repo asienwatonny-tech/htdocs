@@ -1,5 +1,12 @@
 <?php
 require 'includes/auth.php';
+<div class="hero">
+  <img src="/medflow/assets/img/ambulance.svg" alt="">
+  <div>
+    <h1>Smarter patient flow,<br>better healthcare</h1>
+    <p>Know where you are in your hospital visit and how long it will take.</p>
+  </div>
+</div>
 $err = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   $s = $db->prepare("SELECT * FROM staff WHERE username=? AND active=1");

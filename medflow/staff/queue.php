@@ -27,6 +27,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $db->prepare("UPDATE visits SET status='completed' WHERE id=?")->execute([$row['visit_id']]);
         $db->prepare("INSERT INTO notifications (visit_id,message) VALUES (?,?)")
            ->execute([$row['visit_id'], 'Your visit is complete. Thank you.']);
+      }      // tell the next waiting patient at this stage that they are next
+      $nx = $db->prepare("SELECT vs.visit_id, st.name FROM visit_stages vs JOIN stages st ON st.id=vs.stage_id
+                          WHERE vs.stage_id=? AND vs.status='waiting' ORDER BY vs.queued_at LIMIT 1");
+      $nx->execute([$row['stage_id']]);
+      if ($w = $nx->fetch()) {
+        $msg = 'You are next at ' . $w['name'] . '. Please be ready.';
+        $dup = $db->prepare("SELECT COUNT(*) FROM notifications WHERE visit_id=? AND message=?");
+        $dup->execute([$w['visit_id'], $msg]);
+        if (!$dup->fetchColumn())
+          $db->prepare("INSERT INTO notifications (visit_id,message) VALUES (?,?)")->execute([$w['visit_id'], $msg]);
       }
     }
   }
