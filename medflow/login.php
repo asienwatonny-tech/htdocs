@@ -1,5 +1,38 @@
 <?php
 require 'includes/auth.php';
+$err = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+  csrf_check();
+  $s = $db->prepare("SELECT * FROM staff WHERE username=? AND active=1");
+  $s->execute([trim($_POST['username'] ?? '')]);
+  $u = $s->fetch();
+  if ($u && $u['locked_until'] && strtotime($u['locked_until']) > time()) {
+    $err = 'Too many wrong passwords. This account is locked for ' . LOCK_MINUTES . ' minutes.';
+  } elseif ($u && password_verify($_POST['password'] ?? '', $u['password_hash'])) {
+    session_regenerate_id(true);
+    $db->prepare("UPDATE staff SET failed_logins=0, locked_until=NULL, last_login=NOW() WHERE id=?")->execute([$u['id']]);
+    $_SESSION['user'] = ['id'=>(int)$u['id'], 'name'=>$u['full_name'], 'role'=>$u['role'], 'must_change'=>(int)$u['must_change_password']];
+    $_SESSION['last'] = time();
+    audit($db, (int)$u['id'], 'login', $u['username']);
+    if ($u['must_change_password']) { header('Location: /medflow/change_password.php'); exit; }
+    header('Location: /medflow/' . ($u['role']==='admin' ? 'admin/reports.php' : 'staff/dashboard.php'));
+    exit;
+  } else {
+    if ($u) {
+      $n = (int)$u['failed_logins'] + 1;
+      if ($n >= MAX_LOGIN_TRIES) {
+        $db->prepare("UPDATE staff SET failed_logins=0, locked_until=DATE_ADD(NOW(), INTERVAL " . (int)LOCK_MINUTES . " MINUTE) WHERE id=?")->execute([$u['id']]);
+        audit($db, (int)$u['id'], 'account_locked', $u['username']);
+      } else {
+        $db->prepare("UPDATE staff SET failed_logins=? WHERE id=?")->execute([$n, $u['id']]);
+      }
+    }
+    $err = 'Invalid username or password';
+  }
+}
+$title = 'Staff login';
+require 'includes/header.php';
+?>
 <div class="hero">
   <img src="/medflow/assets/img/ambulance.svg" alt="">
   <div>
@@ -7,27 +40,17 @@ require 'includes/auth.php';
     <p>Know where you are in your hospital visit and how long it will take.</p>
   </div>
 </div>
-$err = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-  $s = $db->prepare("SELECT * FROM staff WHERE username=? AND active=1");
-  $s->execute([$_POST['username'] ?? '']);
-  $u = $s->fetch();
-  if ($u && password_verify($_POST['password'] ?? '', $u['password_hash'])) {
-    session_regenerate_id(true);
-    $_SESSION['user'] = ['id'=>$u['id'],'name'=>$u['full_name'],'role'=>$u['role']];
-    header('Location: ' . ($u['role']==='admin' ? 'admin/reports.php' : ($u['role']==='receptionist' ? 'staff/register.php' : 'staff/queue.php')));
-    exit;
-  }
-  $err = 'Invalid username or password';
-}
-?>
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MedFlow Login</title></head>
-<body style="font-family:sans-serif;max-width:360px;margin:60px auto">
-<h2>MedFlow Staff Login</h2><p style="color:red"><?= e($err) ?></p>
-<form method="post">
-  <input name="username" placeholder="Username" required style="width:100%;padding:8px;margin:4px 0"><br>
-  <input name="password" type="password" placeholder="Password" required style="width:100%;padding:8px;margin:4px 0"><br>
-  <button style="padding:8px 16px">Login</button>
-</form>
-<p><a href="track.php">Patient? Track your visit</a></p>
-</body></html>
+
+<div class="card narrow">
+  <h2>Staff login</h2>
+  <?php if ($err): ?><div class="msg err"><?= e($err) ?></div><?php endif; ?>
+  <form method="post" autocomplete="off">
+    <?= csrf_field() ?>
+    <label>Username</label><input name="username" required>
+    <label>Password</label><input name="password" type="password" required>
+    <button>Login</button>
+  </form>
+  <p><a href="track.php">Patient? Track your visit</a></p>
+</div>
+
+<?php require 'includes/footer.php'; ?>
