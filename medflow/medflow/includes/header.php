@@ -12,7 +12,7 @@ $u = $_SESSION['user'] ?? null; $title = $title ?? 'MedFlow';
   <nav>
   <?php if ($u): ?>
     <?php if ($u['role']==='admin'): ?>
-      <a href="/medflow/admin/reports.php">Reports</a><a href="/medflow/admin/staff.php">Staff</a><a href="/medflow/staff/outbox.php">SMS outbox</a>
+      <a href="/medflow/admin/reports.php">Reports</a><a href="/medflow/admin/staff.php">Staff</a><a href="/medflow/admin/prices.php">Prices</a><a href="/medflow/staff/outbox.php">SMS outbox</a>
     <?php elseif ($u['role']==='receptionist'): ?>
       <a href="/medflow/staff/dashboard.php">Dashboard</a><a href="/medflow/staff/register.php">Register patient</a><a href="/medflow/staff/outbox.php">SMS outbox</a>
     <?php else: ?>

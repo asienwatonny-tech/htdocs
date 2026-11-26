@@ -1,5 +1,6 @@
 <?php
 require '../includes/auth.php';
+require '../includes/billing.php';
 require_role(['admin']);
 $perStage = $db->query("SELECT st.name,
   ROUND(AVG(TIMESTAMPDIFF(MINUTE,vs.queued_at,vs.started_at)),1) AS avg_wait,
@@ -24,9 +25,16 @@ $docs = $db->query("SELECT s.full_name, sp.name AS specialty, s.on_duty, s.activ
     (SELECT COUNT(*) FROM visit_stages vs WHERE vs.assigned_to=s.id AND vs.status IN ('waiting','in_service')) AS load_now
   FROM staff s LEFT JOIN specialties sp ON sp.id=s.specialty_id WHERE s.role='doctor' ORDER BY sp.id, s.full_name")->fetchAll();
 
-$emerg = $db->query("SELECT v.queue_code, v.emergency_reason, p.full_name, v.status, v.created_at
-  FROM visits v JOIN patients p ON p.id=v.patient_id WHERE v.priority='emergency' ORDER BY v.id DESC LIMIT 8")->fetchAll();
+$emerg = $db->query("SELECT v.queue_code, v.emergency_reason, v.status, v.created_at
+  FROM visits v WHERE v.priority='emergency' ORDER BY v.id DESC LIMIT 8")->fetchAll();
 
+$rev = $db->query("SELECT
+    COALESCE(SUM(CASE WHEN method<>'waived' AND DATE(paid_at)=CURDATE() THEN amount END),0) AS today,
+    COALESCE(SUM(CASE WHEN method<>'waived' THEN amount END),0) AS total,
+    COALESCE(SUM(CASE WHEN method='waived' THEN amount END),0) AS waived FROM payments")->fetch();
+$unpaid = (float)$db->query("SELECT COALESCE(SUM(amount),0) FROM charges WHERE status='unpaid'")->fetchColumn();
+$byMethod = $db->query("SELECT method, COUNT(*) n, SUM(amount) amt FROM payments WHERE method<>'waived' GROUP BY method ORDER BY amt DESC")->fetchAll();
+$byKind = $db->query("SELECT kind, SUM(amount) amt FROM charges WHERE status='paid' GROUP BY kind ORDER BY amt DESC")->fetchAll();
 $audit = $db->query("SELECT a.created_at, a.action, a.detail, s.username FROM audit_log a LEFT JOIN staff s ON s.id=a.staff_id ORDER BY a.id DESC LIMIT 10")->fetchAll();
 $title = 'Reports';
 require '../includes/header.php';
@@ -44,6 +52,26 @@ require '../includes/header.php';
     <div class="stat"><small>Emergency visits</small><b><?= (int)$tot['emerg_all'] ?></b></div>
     <div class="stat hot"><small>Waiting right now</small><b><?= array_sum(array_map(fn($r) => (int)$r['in_queue'], $perStage)) ?></b></div>
   </div>
+</div>
+
+<div class="card">
+  <h2>Revenue</h2>
+  <div class="stats">
+    <div class="stat hot"><small>Collected today</small><b><?= e(money($rev['today'])) ?></b></div>
+    <div class="stat"><small>Collected in total</small><b><?= e(money($rev['total'])) ?></b></div>
+    <div class="stat"><small>Still unpaid</small><b><?= e(money($unpaid)) ?></b></div>
+    <div class="stat"><small>Waived</small><b><?= e(money($rev['waived'])) ?></b></div>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Payment method</th><th>Payments</th><th>Amount</th></tr></thead>
+    <tbody>
+    <?php foreach ($byMethod as $r): ?><tr><td><?= e(ucfirst($r['method'])) ?></td><td><?= (int)$r['n'] ?></td><td><?= e(money($r['amt'])) ?></td></tr><?php endforeach; if (!$byMethod) echo '<tr><td colspan="3" class="empty">No payments yet.</td></tr>'; ?>
+    </tbody></table></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Income by service</th><th>Amount</th></tr></thead>
+    <tbody>
+    <?php foreach ($byKind as $r): ?><tr><td><?= e(ucfirst($r['kind'])) ?></td><td><?= e(money($r['amt'])) ?></td></tr><?php endforeach; if (!$byKind) echo '<tr><td colspan="2" class="empty">Nothing yet.</td></tr>'; ?>
+    </tbody></table></div>
 </div>
 
 <div class="card">
@@ -97,10 +125,10 @@ require '../includes/header.php';
 <div class="card">
   <h2>Recent emergencies</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Queue ID</th><th>Patient</th><th>Reason</th><th>Status</th><th>Time</th></tr></thead>
+    <thead><tr><th>Queue ID</th><th>Reason</th><th>Status</th><th>Time</th></tr></thead>
     <tbody>
     <?php foreach ($emerg as $r): ?>
-      <tr class="emerg-row"><td><b><?= e($r['queue_code']) ?></b></td><td><?= e($r['full_name']) ?></td><td><?= e($r['emergency_reason'] ?? '-') ?></td>
+      <tr class="emerg-row"><td><b><?= e($r['queue_code']) ?></b></td><td><?= e($r['emergency_reason'] ?? '-') ?></td>
         <td><?= e(ucfirst($r['status'])) ?></td><td><?= e($r['created_at']) ?></td></tr>
     <?php endforeach; ?>
     </tbody></table></div>

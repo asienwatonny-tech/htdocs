@@ -10,3 +10,4 @@ define('IDLE_LIMIT_SEC', 1800);      // staff are signed out after 30 minutes id
 define('MAX_LOGIN_TRIES', 5);        // wrong passwords before the account is locked
 define('LOCK_MINUTES', 10);          // how long the lock lasts
 define('RECEIPT_SECRET', 'change-this-text-before-real-use');   // used to make receipt verification codes
+define('CURRENCY', 'KES');                // money is shown as KES 1,500.00

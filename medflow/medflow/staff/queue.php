@@ -1,6 +1,6 @@
 <?php
 require '../includes/auth.php';
-require_role(['nurse','doctor','lab','pharmacy']);
+require_role(['cashier','nurse','doctor','lab','pharmacy']);
 $uid = (int)$_SESSION['user']['id']; $role = $_SESSION['user']['role'];
 
 // Patients waiting for my kind of stage. A doctor sees only patients assigned to them (or not yet assigned).
@@ -12,7 +12,8 @@ $q = $db->prepare("SELECT vs.id, vs.status, vs.queued_at, vs.assigned_to, v.queu
   ORDER BY (v.priority='emergency') DESC, vs.queued_at ASC, vs.id ASC");
 $q->execute([$role, $uid]); $list = $q->fetchAll();
 $emergencies = count(array_filter($list, fn($r) => $r['priority'] === 'emergency'));
-$labels = ['nurse'=>'Nurse / Triage','doctor'=>'Doctor','lab'=>'Laboratory','pharmacy'=>'Pharmacy'];
+$labels = ['cashier'=>'Cashier','nurse'=>'Nurse / Triage','doctor'=>'Doctor','lab'=>'Laboratory','pharmacy'=>'Pharmacy'];
+$page = $role === 'cashier' ? 'payment.php' : 'patient.php';
 $title = 'My queue';
 require '../includes/header.php';
 ?>
@@ -40,7 +41,7 @@ require '../includes/header.php';
         <td><?= e($r['stage']) ?></td>
         <td><?= e(date('H:i', strtotime($r['queued_at']))) ?></td>
         <td><span class="badge b-<?= e($r['status']) ?>"><?= e(ucfirst(str_replace('_',' ',$r['status']))) ?></span></td>
-        <td><a class="btn" href="/medflow/staff/patient.php?vs=<?= (int)$r['id'] ?>">Open</a></td>
+        <td><a class="btn" href="/medflow/staff/<?= $page ?>?vs=<?= (int)$r['id'] ?>">Open</a></td>
       </tr>
     <?php endforeach; if (!$list) echo '<tr><td colspan="7" class="empty">No patients waiting. New patients will appear here.</td></tr>'; ?>
     </tbody>

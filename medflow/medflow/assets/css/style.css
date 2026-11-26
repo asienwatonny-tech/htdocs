@@ -123,3 +123,15 @@ details.case summary{cursor:pointer}
 .b-pending{background:#f0f2f4;color:var(--muted)}
 .btn-alt{background:#fff;color:var(--brand);border:2px solid var(--brand)}
 .stat b small{font-size:.7rem;font-weight:400;color:var(--muted)}
+
+/* ===== v3: payments, confidentiality, timeline ===== */
+.msg.privacy{background:#eef4f8;border-left:4px solid var(--brand);color:var(--text)}
+ol.timeline{list-style:none;margin:8px 0 0;padding:0;border-left:3px solid var(--line)}
+ol.timeline li{position:relative;padding:4px 0 8px 16px}
+ol.timeline li::before{content:"";position:absolute;left:-8px;top:10px;width:11px;height:11px;border-radius:50%;background:var(--brand)}
+ol.timeline .when{display:inline-block;min-width:48px;color:var(--muted);font-variant-numeric:tabular-nums}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tfoot th{border-top:2px solid var(--brand)}
+form.inline-search{display:flex;gap:8px;margin:8px 0 14px}
+form.inline-search input{flex:1;margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:18px 0}

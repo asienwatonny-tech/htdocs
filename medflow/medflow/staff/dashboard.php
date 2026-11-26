@@ -1,8 +1,9 @@
 <?php
 require '../includes/auth.php';
-require_role(['receptionist','nurse','doctor','lab','pharmacy']);
+require '../includes/billing.php';
+require_role(['receptionist','cashier','nurse','doctor','lab','pharmacy']);
 $uid = (int)$_SESSION['user']['id']; $role = $_SESSION['user']['role'];
-$labels = ['receptionist'=>'Reception','nurse'=>'Nurse / Triage','doctor'=>'Doctor','lab'=>'Laboratory','pharmacy'=>'Pharmacy'];
+$labels = ['receptionist'=>'Reception','cashier'=>'Cashier','nurse'=>'Nurse / Triage','doctor'=>'Doctor','lab'=>'Laboratory','pharmacy'=>'Pharmacy'];
 
 // My numbers: stages I completed (registration counts for reception), and how long each took.
 $m = $db->prepare("SELECT COUNT(*) AS total,
@@ -28,7 +29,7 @@ if ($role !== 'receptionist') {
   $inq = count($all); $emerg = count(array_filter($all, fn($r) => $r['priority'] === 'emergency'));
   $preview = array_slice($all, 0, 5);
 } else {
-  $active = $db->query("SELECT v.queue_code, v.priority, v.status, p.full_name,
+  $active = $db->query("SELECT v.queue_code, v.priority, v.status, v.verify_status, p.full_name,
       (SELECT st.name FROM visit_stages vs JOIN stages st ON st.id=vs.stage_id
         WHERE vs.visit_id=v.id AND vs.status IN ('waiting','in_service') ORDER BY st.seq LIMIT 1) AS at_stage
     FROM visits v JOIN patients p ON p.id=v.patient_id
@@ -36,6 +37,15 @@ if ($role !== 'receptionist') {
     ORDER BY (v.status='active') DESC, v.id DESC LIMIT 15")->fetchAll();
   $inq = (int)$db->query("SELECT COUNT(*) FROM visits WHERE status='active'")->fetchColumn();
   $emerg = (int)$db->query("SELECT COUNT(*) FROM visits WHERE status='active' AND priority='emergency'")->fetchColumn();
+}
+$page = $role === 'cashier' ? 'payment.php' : 'patient.php';
+$cash = null;
+if ($role === 'cashier') {
+  $cs = $db->prepare("SELECT COALESCE(SUM(CASE WHEN method<>'waived' THEN amount END),0) AS collected, COUNT(*) AS n,
+    COALESCE(SUM(CASE WHEN method='waived' THEN amount END),0) AS waived FROM payments WHERE received_by=? AND DATE(paid_at)=CURDATE()");
+  $cs->execute([$uid]); $cash = $cs->fetch();
+  $bm = $db->prepare("SELECT method, SUM(amount) AS amt FROM payments WHERE received_by=? AND DATE(paid_at)=CURDATE() AND method<>'waived' GROUP BY method");
+  $bm->execute([$uid]); $byMethod = $bm->fetchAll();
 }
 $refPending = 0;
 if ($role === 'doctor') {
@@ -63,6 +73,14 @@ require '../includes/header.php';
       <div class="stat"><small>My referrals pending</small><b><?= $refPending ?></b></div>
     <?php endif; ?>
   </div>
+  <?php if ($cash): ?>
+    <div class="stats">
+      <div class="stat hot"><small>Collected today</small><b><?= e(money($cash['collected'])) ?></b></div>
+      <div class="stat"><small>Payments today</small><b><?= (int)$cash['n'] ?></b></div>
+      <div class="stat"><small>Waived today</small><b><?= e(money($cash['waived'])) ?></b></div>
+      <?php foreach ($byMethod as $bmRow): ?><div class="stat"><small><?= e(ucfirst($bmRow['method'])) ?></small><b style="font-size:1.1rem"><?= e(money($bmRow['amt'])) ?></b></div><?php endforeach; ?>
+    </div>
+  <?php endif; ?>
   <p>
     <?php if ($role === 'receptionist'): ?><a class="btn" href="/medflow/staff/register.php">Register a patient</a>
     <?php else: ?><a class="btn" href="/medflow/staff/queue.php">Open my queue</a><?php endif; ?>
@@ -80,7 +98,9 @@ require '../includes/header.php';
       <tr<?= $r['priority']==='emergency' ? ' class="emerg-row"' : '' ?>>
         <td><b><?= e($r['queue_code']) ?></b><?= $r['priority']==='emergency' ? ' <span class="badge b-emergency">Emergency</span>' : '' ?></td>
         <td><?= e($r['full_name']) ?></td>
-        <td><?= $r['status']==='completed' ? '<span class="badge b-completed">Visit complete</span>' : e($r['at_stage'] ?? '-') ?></td>
+        <td><?php if ($r['status']==='completed'): ?><span class="badge b-completed">Visit complete</span>
+          <?php elseif ($r['verify_status']==='pending'): ?><a class="btn" href="/medflow/staff/register.php?verify=<?= e($r['queue_code']) ?>">Verify phone</a>
+          <?php else: echo e($r['at_stage'] ?? '-'); endif; ?></td>
         <td><?php if ($r['status']==='completed'): ?><a href="/medflow/receipt.php?code=<?= e($r['queue_code']) ?>" target="_blank">Print receipt</a><?php else: ?>-<?php endif; ?></td>
       </tr>
     <?php endforeach; if (!$active) echo '<tr><td colspan="4" class="empty">No visits yet.</td></tr>'; ?>
@@ -97,7 +117,7 @@ require '../includes/header.php';
         <td><b><?= e($r['queue_code']) ?></b><?= $r['priority']==='emergency' ? ' <span class="badge b-emergency">Emergency</span>' : '' ?></td>
         <td><?= e($r['full_name']) ?></td><td><?= e($r['stage']) ?></td>
         <td><span class="badge b-<?= e($r['status']) ?>"><?= e(ucfirst(str_replace('_',' ',$r['status']))) ?></span></td>
-        <td><a class="btn" href="/medflow/staff/patient.php?vs=<?= (int)$r['id'] ?>">Open</a></td>
+        <td><a class="btn" href="/medflow/staff/<?= $page ?>?vs=<?= (int)$r['id'] ?>">Open</a></td>
       </tr>
     <?php endforeach; if (!$preview) echo '<tr><td colspan="5" class="empty">Nobody is waiting right now.</td></tr>'; ?>
     </tbody></table></div>

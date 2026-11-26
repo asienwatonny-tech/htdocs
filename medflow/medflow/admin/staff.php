@@ -4,7 +4,7 @@ require '../includes/sms.php';
 require_role(['admin']);
 $me = (int)$_SESSION['user']['id'];
 $msg = ''; $ok = false; $newPass = null; $newUser = '';
-$roles = ['receptionist' => 'Receptionist', 'nurse' => 'Nurse / Triage', 'doctor' => 'Doctor', 'lab' => 'Laboratory', 'pharmacy' => 'Pharmacy', 'admin' => 'Administrator'];
+$roles = ['receptionist' => 'Receptionist', 'cashier' => 'Cashier', 'nurse' => 'Nurse / Triage', 'doctor' => 'Doctor', 'lab' => 'Laboratory', 'pharmacy' => 'Pharmacy', 'admin' => 'Administrator'];
 $specs = $db->query("SELECT id,name FROM specialties ORDER BY id")->fetchAll();
 $specIds = array_map(fn($s) => (int)$s['id'], $specs);
 

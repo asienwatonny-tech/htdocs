@@ -1,6 +1,7 @@
 <?php
-// Patient flow rules: doctor matching, moving a patient to the next stage, emergencies.
+// Patient flow rules: doctor matching, payment gates, moving a patient to the next stage, emergencies.
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/billing.php';
 
 function stage_id(PDO $db, string $name): int {
   static $cache = [];
@@ -14,6 +15,11 @@ function stage_id(PDO $db, string $name): int {
 
 function notify(PDO $db, int $visitId, string $msg): void {
   $db->prepare("INSERT INTO notifications (visit_id,message) VALUES (?,?)")->execute([$visitId, $msg]);
+}
+
+function is_emergency(PDO $db, int $visitId): bool {
+  $s = $db->prepare("SELECT priority FROM visits WHERE id=?"); $s->execute([$visitId]);
+  return $s->fetchColumn() === 'emergency';
 }
 
 /* Doctor with the fewest waiting patients. Only active doctors who are on duty.
@@ -31,7 +37,7 @@ function pick_doctor(PDO $db, ?int $specialtyId): ?int {
   return $id === false ? null : (int)$id;
 }
 
-/* Wanted specialty first; if nobody is on duty for it, a general doctor; then any doctor. */
+/* First visit: a general doctor. If none is on duty, any doctor. (Only a doctor can refer to a specialist.) */
 function match_doctor(PDO $db, int $specialtyId): ?int {
   $d = pick_doctor($db, $specialtyId);
   if ($d === null && $specialtyId !== 1) $d = pick_doctor($db, 1);
@@ -59,31 +65,54 @@ function skip_stage(PDO $db, int $visitId, string $stageName): void {
      ->execute([$now, $now, $visitId, $sid]);
 }
 
+/* Payment gate: send the patient to the cashier if something is unpaid, otherwise straight on.
+   Emergency patients are treated first and pay at the end (Settlement). */
+function gate_to(PDO $db, int $visitId, string $payStage, string $nextStage): void {
+  $due = unpaid_total($db, $visitId, gate_kinds($payStage));
+  if ($due > 0 && !is_emergency($db, $visitId)) {
+    queue_stage($db, $visitId, $payStage);
+    notify($db, $visitId, 'Please go to the cashier and pay ' . money($due) . ' to continue.');
+  } else {
+    queue_stage($db, $visitId, $nextStage);
+    notify($db, $visitId, 'You have moved to the next stage. Check your journey.');
+  }
+}
+
+/* After registration (and phone verification): consultation fee, then triage. */
+function start_journey(PDO $db, int $visitId): void {
+  gate_to($db, $visitId, 'Consultation Payment', 'Nurse/Triage');
+}
+
+/* End of the visit: anything still unpaid goes to Settlement first. */
 function finish_visit(PDO $db, int $visitId): void {
+  $due = unpaid_total($db, $visitId);
+  if ($due > 0) {
+    queue_stage($db, $visitId, 'Settlement');
+    notify($db, $visitId, 'Almost done. Please go to the cashier and settle ' . money($due) . ' to complete your visit.');
+    return;
+  }
   $db->prepare("UPDATE visits SET status='completed', completed_at=? WHERE id=?")->execute([date('Y-m-d H:i:s'), $visitId]);
   notify($db, $visitId, 'Your visit is complete. Your receipt is ready to view and download.');
 }
 
-/* After the pharmacy-facing work: go to Pharmacy if medicine was prescribed, otherwise finish. */
+/* Medicine prescribed: pay at the cashier, then pharmacy. No medicine: the visit can finish. */
 function route_to_pharmacy_or_finish(PDO $db, int $visitId): void {
   $n = $db->prepare("SELECT COUNT(*) FROM prescriptions WHERE visit_id=?");
   $n->execute([$visitId]);
   if ((int)$n->fetchColumn() > 0) {
-    queue_stage($db, $visitId, 'Pharmacy');
-    notify($db, $visitId, 'You have moved to the next stage. Check your journey.');
+    gate_to($db, $visitId, 'Pharmacy Payment', 'Pharmacy');
   } else {
     skip_stage($db, $visitId, 'Pharmacy');
     finish_visit($db, $visitId);
   }
 }
 
-/* After the doctor (or specialist): laboratory if tests were ordered, otherwise straight on. */
+/* After the doctor (or specialist): tests go through the cashier to the laboratory, otherwise straight on. */
 function route_after_consult(PDO $db, int $visitId): void {
   $n = $db->prepare("SELECT COUNT(*) FROM lab_orders WHERE visit_id=? AND status='ordered'");
   $n->execute([$visitId]);
   if ((int)$n->fetchColumn() > 0) {
-    queue_stage($db, $visitId, 'Laboratory');
-    notify($db, $visitId, 'Your doctor has requested tests. Please go to the laboratory.');
+    gate_to($db, $visitId, 'Lab Payment', 'Laboratory');
   } else {
     skip_stage($db, $visitId, 'Laboratory');
     skip_stage($db, $visitId, 'Results');
@@ -95,19 +124,24 @@ function route_after_consult(PDO $db, int $visitId): void {
 function advance_after(PDO $db, int $visitId, string $done): void {
   $st = $db->prepare("SELECT * FROM visits WHERE id=?");
   $st->execute([$visitId]); $visit = $st->fetch();
+  $moved = 'You have moved to the next stage. Check your journey.';
   switch ($done) {
+    case 'Consultation Payment':
+      queue_stage($db, $visitId, 'Nurse/Triage');
+      notify($db, $visitId, $moved);
+      break;
     case 'Nurse/Triage':
       $doc = match_doctor($db, (int)$visit['needed_specialty_id']);
       $db->prepare("UPDATE visits SET assigned_doctor_id=? WHERE id=?")->execute([$doc, $visitId]);
       queue_stage($db, $visitId, 'Doctor', $doc);
-      notify($db, $visitId, 'You have moved to the next stage. Check your journey.');
+      notify($db, $visitId, $moved);
       break;
     case 'Doctor':
       $r = $db->prepare("SELECT * FROM referrals WHERE visit_id=? AND status='pending' ORDER BY id LIMIT 1");
       $r->execute([$visitId]); $ref = $r->fetch();
       if ($ref) {
         queue_stage($db, $visitId, 'Specialist', $ref['to_doctor_id'] !== null ? (int)$ref['to_doctor_id'] : null);
-        notify($db, $visitId, 'You have been referred to a specialist. Check your journey.');
+        notify($db, $visitId, 'Your doctor has referred you to a specialist. Check your journey.');
       } else {
         route_after_consult($db, $visitId);
       }
@@ -117,6 +151,10 @@ function advance_after(PDO $db, int $visitId, string $done): void {
          ->execute([date('Y-m-d H:i:s'), $visitId]);
       route_after_consult($db, $visitId);
       break;
+    case 'Lab Payment':
+      queue_stage($db, $visitId, 'Laboratory');
+      notify($db, $visitId, 'Payment received. Please go to the laboratory.');
+      break;
     case 'Laboratory':
       $doc = $visit['assigned_doctor_id'] !== null ? (int)$visit['assigned_doctor_id'] : null;
       queue_stage($db, $visitId, 'Results', $doc);
@@ -125,7 +163,12 @@ function advance_after(PDO $db, int $visitId, string $done): void {
     case 'Results':
       route_to_pharmacy_or_finish($db, $visitId);
       break;
+    case 'Pharmacy Payment':
+      queue_stage($db, $visitId, 'Pharmacy');
+      notify($db, $visitId, 'Payment received. Please go to the pharmacy.');
+      break;
     case 'Pharmacy':
+    case 'Settlement':
       finish_visit($db, $visitId);
       break;
   }
@@ -146,10 +189,10 @@ function notify_next(PDO $db, int $stageId, ?int $assignedTo): void {
   }
 }
 
-/* Finish the stage row and move the patient on. $c is the case row loaded in staff/patient.php. */
+/* Finish the stage row and move the patient on. $c is the case row loaded by the staff page. */
 function finish_stage(PDO $db, array $c, int $uid): void {
-  $db->prepare("UPDATE visit_stages SET status='completed', completed_at=?, updated_by=? WHERE id=?")
-     ->execute([date('Y-m-d H:i:s'), $uid, $c['id']]);
+  $db->prepare("UPDATE visit_stages SET status='completed', completed_at=?, started_at=COALESCE(started_at,?), updated_by=? WHERE id=?")
+     ->execute([date('Y-m-d H:i:s'), date('Y-m-d H:i:s'), $uid, $c['id']]);
   advance_after($db, (int)$c['visit_id'], $c['stage_name']);
   notify_next($db, (int)$c['stage_id'], $c['assigned_to'] !== null ? (int)$c['assigned_to'] : null);
 }
